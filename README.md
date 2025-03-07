@@ -14,3 +14,10 @@ Arvore do projeto:
 │   └── scripts
 │       └── main.py
 └── README.md
+
+para renderizar uma nova arvore com o comando `tree`:
+
+```bash
+cd ~/projects/projeto_mgi
+tree -I ".git|__pycache__|.venv|*.pyc"
+```
