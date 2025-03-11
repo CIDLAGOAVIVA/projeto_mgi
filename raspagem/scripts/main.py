@@ -4,15 +4,15 @@ from crawl4ai import *
 
 async def main():
     # Create directories if they don't exist
-    os.makedirs("prompts/TELEBRAS/dados_raspagem", exist_ok=True)
+    os.makedirs("prompts/CEITEC/dados_raspagem", exist_ok=True)
     
     async with AsyncWebCrawler() as crawler:
         result = await crawler.arun(
-            url="https://www.telebras.com.br/",
+            url="http://www.ceitec-sa.com/pt",
         )
         
         # Save the output to the specified file
-        with open("prompts/TELEBRAS/dados_raspagem/mapa_site.md", "w", encoding="utf-8") as f:
+        with open("prompts/CEITEC/dados_raspagem/mapa_site.md", "w", encoding="utf-8") as f:
             f.write(result.markdown)
 
 if __name__ == "__main__":
