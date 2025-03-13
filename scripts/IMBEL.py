@@ -26,6 +26,17 @@ def sanitize_filename(url):
 def get_db_connection():
     """Estabelece conexão com o banco de dados usando variáveis de ambiente."""
     load_dotenv()  # Carrega as variáveis do .env
+
+    # Verificar se as variáveis de ambiente necessárias estão presentes
+    required_vars = ['DB_NAME', 'DB_USER', 'DB_PASSWORD', 'DB_HOST']
+    missing_vars = [var for var in required_vars if not os.getenv(var)]
+
+    if missing_vars:
+        raise EnvironmentError(
+            f"Variáveis de ambiente obrigatórias não encontradas: {', '.join(missing_vars)}. "
+            f"Certifique-se de criar um arquivo .env baseado no .env.example."
+        )
+
     return psycopg2.connect(
         dbname=os.getenv('DB_NAME'),
         user=os.getenv('DB_USER'),

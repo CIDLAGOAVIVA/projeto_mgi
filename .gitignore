@@ -12,3 +12,22 @@ wheels/
 .env
 
 data/
+
+# Arquivos de ambiente
+.env
+
+# Arquivos de cache Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Diretórios de ambiente virtual
+venv/
+env/
+ENV/
+
+# Arquivos de logs
+*.log
+
+# Arquivos temporários
+*.tmp
