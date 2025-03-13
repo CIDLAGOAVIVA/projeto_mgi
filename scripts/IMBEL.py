@@ -105,9 +105,9 @@ async def main():
     # Configuração avançada do crawler
     run_config = CrawlerRunConfig(
         deep_crawl_strategy=BFSDeepCrawlStrategy(
-            max_depth=2,
+            max_depth=6,
             include_external=False,
-            max_pages=100
+            max_pages=10000
         ),
         # Configurações de limpeza de conteúdo
         word_count_threshold=10,  # Mínimo de palavras por bloco de conteúdo

@@ -20,3 +20,10 @@ para renderizar uma nova arvore com o comando `tree`:
 ```bash
 tree -I ".git|__pycache__|.venv|*.pyc"
 ```
+
+
+para rodar em segundo plano:
+
+```bash
+nohup uv run scripts/CEITEC.py > logs_ceitec.log >&1 &
+```

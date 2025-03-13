@@ -96,7 +96,7 @@ async def main():
         deep_crawl_strategy=BFSDeepCrawlStrategy(
             max_depth=10,
             include_external=True,
-            max_pages=1000
+            max_pages=10000
         ),
         # Configurações de limpeza de conteúdo
         word_count_threshold=10,  # Mínimo de palavras por bloco de conteúdo
