@@ -2,7 +2,7 @@ import asyncio
 import os
 import re
 from pathlib import Path
-from crawl4ai import AsyncWebCrawler
+from crawl4ai import AsyncWebCrawler, CacheMode
 from crawl4ai.deep_crawling import BFSDeepCrawlStrategy
 from crawl4ai.content_scraping_strategy import LXMLWebScrapingStrategy
 from crawl4ai.async_configs import BrowserConfig, CrawlerRunConfig
@@ -35,10 +35,14 @@ async def main():
         ),
         # Configurações de limpeza de conteúdo
         word_count_threshold=10,  # Mínimo de palavras por bloco de conteúdo
-        excluded_tags=['form', 'header', 'footer', 'nav'],  # Tags para excluir
+        excluded_tags=['form', 'header', 'footer', 'nav',
+                       'blog-anteriores', 'header-menu', 'bar-filters', 'titulo-link'],  # Tags para excluir
+        excluded_selector=".blog-anteriores",  # Corrigido: String em vez de lista
         exclude_external_links=True,  # Remover links externos
         remove_overlay_elements=True,  # Remover popups/modals
         process_iframes=True,  # Processar conteúdo de iframes
+        # Desabilitar completamente o cache para garantir que excluded_tags funcione
+        cache_mode=CacheMode.DISABLED,
     )
 
     # Criar a pasta para armazenar os arquivos markdown
