@@ -2,12 +2,10 @@ import asyncio
 import os
 import re
 import psycopg2
-from psycopg2.extras import execute_values
-from psycopg2.extensions import adapt, register_adapter, AsIs
-from pathlib import Path
+from psycopg2.extensions import register_adapter, AsIs
+from dotenv import load_dotenv
 from crawl4ai import AsyncWebCrawler, CacheMode
 from crawl4ai.deep_crawling import BFSDeepCrawlStrategy
-from crawl4ai.content_scraping_strategy import LXMLWebScrapingStrategy
 from crawl4ai.async_configs import BrowserConfig, CrawlerRunConfig
 
 
@@ -26,12 +24,13 @@ def sanitize_filename(url):
 
 
 def get_db_connection():
-    """Estabelece conexão com o banco de dados."""
+    """Estabelece conexão com o banco de dados usando variáveis de ambiente."""
+    load_dotenv()  # Carrega as variáveis do .env
     return psycopg2.connect(
-        dbname="mgi_raspagem",
-        user="mgi",
-        password="l4g04uff",
-        host="localhost"
+        dbname=os.getenv('DB_NAME'),
+        user=os.getenv('DB_USER'),
+        password=os.getenv('DB_PASSWORD'),
+        host=os.getenv('DB_HOST')
     )
 
 
@@ -101,9 +100,10 @@ async def main():
         ),
         # Configurações de limpeza de conteúdo
         word_count_threshold=10,  # Mínimo de palavras por bloco de conteúdo
-        excluded_tags=['form', 'header', 'footer', 'nav'],  # Tags para excluir
+        excluded_tags=['form', 'header', 'footer', 'nav',
+                       'img-logo-imbel', 'barra-brasil'],  # Tags para excluir
         # Múltiplos seletores separados por vírgula
-        excluded_selector=".blog-anteriores,.cookies-eu-banner",
+        excluded_selector=".blog-anteriores,.cookies-eu-banner,.header-logo-t,.conteudo-barra-brasil",
         exclude_external_links=True,  # Remover links externos
         remove_overlay_elements=True,  # Remover popups/modals
         process_iframes=True,  # Processar conteúdo de iframes
