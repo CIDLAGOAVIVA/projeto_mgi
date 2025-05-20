@@ -52,14 +52,17 @@ EMPRESAS = {
         "excluded_selector": ".blog-anteriores,.cookies-eu-banner,.header-logo-t,.conteudo-barra-brasil"
     },
     "ceitec": {
-        # Adicionar protocolo http:// que estava faltando
+        # O URL sem protocolo funcionou melhor no script antigo
         "url": "http://www.ceitec-sa.com/",
         "tabela": "tbl_paginas_ceitec",
         "max_depth": 10,
         "include_external": True,
-        "excluded_tags": ['form', 'header', 'footer', 'nav'],
-        "excluded_selector": ".blog-anteriores,.cookies-eu-banner",
-        "ignore_ssl_errors": True
+        # Vamos remover as exclusões para permitir rastrear todo o conteúdo
+        "excluded_tags": [],
+        "excluded_selector": "",
+        "ignore_ssl_errors": True,
+        # Adicionar flag especial para usar configurações específicas
+        "use_simplified_crawler": True
     },
     "telebras": {
         "url": "https://www.telebras.com.br/",
@@ -753,23 +756,44 @@ async def process_empresa(nome_empresa: str, force_update: bool = False, skip_br
     # Configurações do browser com modo verboso
     browser_config = BrowserConfig(verbose=True)
 
-    # Configuração avançada do crawler
-    run_config = CrawlerRunConfig(
-        deep_crawl_strategy=BFSDeepCrawlStrategy(
-            max_depth=config["max_depth"],
-            include_external=config["include_external"],
-            max_pages=10000
-        ),
-        # Configurações de limpeza de conteúdo
-        word_count_threshold=10,  # Mínimo de palavras por bloco de conteúdo
-        excluded_tags=config["excluded_tags"],  # Tags para excluir
-        # Múltiplos seletores separados por vírgula
-        excluded_selector=config["excluded_selector"],
-        exclude_external_links=True,  # Remover links externos
-        remove_overlay_elements=True,  # Remover popups/modals
-        process_iframes=True,  # Processar conteúdo de iframes
-        cache_mode=CacheMode.DISABLED,  # Desabilitar completamente o cache
-    )
+    # Verificar se a empresa precisa de configuração especial simplificada
+    use_simplified = config.get("use_simplified_crawler", False)
+
+    # Configuração avançada do crawler - personalizada para cada empresa se necessário
+    if use_simplified and nome_empresa == "ceitec":
+        # Usar configuração simples para CEITEC baseada no script que funcionava
+        run_config = CrawlerRunConfig(
+            deep_crawl_strategy=BFSDeepCrawlStrategy(
+                max_depth=config["max_depth"],
+                include_external=config["include_external"],
+                max_pages=10000
+            ),
+            # Configurações mínimas que funcionavam no script antigo
+            word_count_threshold=10,
+            exclude_external_links=True,
+            remove_overlay_elements=True,
+            process_iframes=True,
+            cache_mode=CacheMode.DISABLED,
+        )
+        logger.info(f"Usando configuração simplificada para {nome_empresa}")
+    else:
+        # Usar configuração padrão para as outras empresas
+        run_config = CrawlerRunConfig(
+            deep_crawl_strategy=BFSDeepCrawlStrategy(
+                max_depth=config["max_depth"],
+                include_external=config["include_external"],
+                max_pages=10000
+            ),
+            # Configurações de limpeza de conteúdo
+            word_count_threshold=10,  # Mínimo de palavras por bloco de conteúdo
+            excluded_tags=config["excluded_tags"],  # Tags para excluir
+            # Múltiplos seletores separados por vírgula
+            excluded_selector=config["excluded_selector"],
+            exclude_external_links=True,  # Remover links externos
+            remove_overlay_elements=True,  # Remover popups/modals
+            process_iframes=True,  # Processar conteúdo de iframes
+            cache_mode=CacheMode.DISABLED,  # Desabilitar completamente o cache
+        )
 
     # Lista para armazenar URLs de documentos que encontramos
     document_urls = []
@@ -790,6 +814,18 @@ async def process_empresa(nome_empresa: str, force_update: bool = False, skip_br
 
     # Usar TCPConnector com verify_ssl=False em vez de ssl=False
     connector = aiohttp.TCPConnector(verify_ssl=False)
+
+    # Para a CEITEC, vamos usar configurações de conexão mais tolerantes
+    if nome_empresa == "ceitec":
+        connector = aiohttp.TCPConnector(
+            verify_ssl=False,
+            force_close=True,  # Forçar fechamento de conexões para evitar problemas
+            enable_cleanup_closed=True,  # Limpar conexões fechadas
+            limit=10  # Limitar número de conexões paralelas
+        )
+        logger.info(
+            f"Usando configuração de conexão otimizada para {nome_empresa}")
+
     async with aiohttp.ClientSession(connector=connector, timeout=conn_timeout) as session:
         # Função para checagem rápida de URLs de documentos quando skip_browser=True
         async def check_document_head(url: str) -> bool:
@@ -823,25 +859,28 @@ async def process_empresa(nome_empresa: str, force_update: bool = False, skip_br
                 return False
 
         # Antes de executar o crawler, tente obter links da página inicial
-        try:
-            logger.info(
-                f"Fazendo análise prévia da página inicial de {nome_empresa}")
-            # Usar um cliente HTTP com SSL desabilitado, mas de forma correta
-            connector = aiohttp.TCPConnector(verify_ssl=False)
-            async with aiohttp.ClientSession(connector=connector) as ssl_disabled_session:
-                async with ssl_disabled_session.get(config["url"], timeout=30) as response:
-                    if response.status == 200:
-                        html_content = await response.text()
-                        initial_links = await extract_links_from_page(html_content, config["url"])
+        # para CEITEC, vamos pular esta etapa conforme o script antigo
+        if not (nome_empresa == "ceitec" and use_simplified):
+            try:
+                logger.info(
+                    f"Fazendo análise prévia da página inicial de {nome_empresa}")
+                # Usar um cliente HTTP com SSL desabilitado, mas de forma correta
+                connector = aiohttp.TCPConnector(verify_ssl=False)
+                async with aiohttp.ClientSession(connector=connector) as ssl_disabled_session:
+                    async with ssl_disabled_session.get(config["url"], timeout=30) as response:
+                        if response.status == 200:
+                            html_content = await response.text()
+                            initial_links = await extract_links_from_page(html_content, config["url"])
 
-                        # Verificar quais links são documentos
-                        for link in initial_links:
-                            if is_definitely_document_url(link):
-                                probable_document_urls.add(link)
-                                logger.info(
-                                    f"Documento identificado na página inicial: {link}")
-        except Exception as e:
-            logger.error(f"Erro na análise prévia da página inicial: {str(e)}")
+                            # Verificar quais links são documentos
+                            for link in initial_links:
+                                if is_definitely_document_url(link):
+                                    probable_document_urls.add(link)
+                                    logger.info(
+                                        f"Documento identificado na página inicial: {link}")
+            except Exception as e:
+                logger.error(
+                    f"Erro na análise prévia da página inicial: {str(e)}")
 
         # Filtro para URLs já processadas e para identificar documentos
         async def should_process_url(url: str) -> bool:
@@ -929,10 +968,13 @@ async def process_empresa(nome_empresa: str, force_update: bool = False, skip_br
         # Modificar o crawler para interceptar solicitações ao browser
         async with AsyncWebCrawler(config=browser_config) as crawler:
             # Adicionar o filtro de URLs ao crawler
-            crawler.url_filter = should_process_url
-
-            # Remover o hook before_goto que estava causando o erro, pois
-            # toda a lógica já está no url_filter agora
+            if nome_empresa == "ceitec" and use_simplified:
+                # Para CEITEC, desativamos o filtro de URL completamente, como no script original
+                crawler.url_filter = None
+                logger.info(f"Desativando filtro de URL para {nome_empresa}")
+            else:
+                # Para outras empresas, usar o filtro normal
+                crawler.url_filter = should_process_url
 
             # Executar o crawler para páginas HTML
             results = await crawler.arun(config["url"], config=run_config)
