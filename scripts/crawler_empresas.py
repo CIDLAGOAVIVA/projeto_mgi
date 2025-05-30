@@ -18,6 +18,7 @@ import urllib.parse
 import zipfile
 import uuid
 import logging
+import shutil
 from urllib.parse import urlparse
 from psycopg2.extensions import register_adapter, AsIs
 from dotenv import load_dotenv
@@ -91,6 +92,173 @@ DOCUMENT_PATH_PATTERNS = [
     '/storage/', '/download/', '/arquivos/', '/documentos/',
     '/files/', '/attachments/', '/anexos/'
 ]
+
+# Adicionar constante para controle de cache
+CACHE_DIR = os.path.join(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))), 'cache')
+
+# Adicionar constante para diretório de saída
+OUTPUT_DIR = os.path.join(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))), 'output')
+
+# Adicionar funções para gerenciar cache
+
+
+def get_cache_filename(empresa: str) -> str:
+    """
+    Retorna o nome do arquivo de cache para uma empresa.
+
+    Args:
+        empresa: Nome da empresa
+
+    Returns:
+        Caminho do arquivo de cache
+    """
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    return os.path.join(CACHE_DIR, f"{empresa}_crawled_urls.txt")
+
+
+def load_crawled_urls_from_cache(empresa: str) -> Set[str]:
+    """
+    Carrega URLs já processadas do cache.
+
+    Args:
+        empresa: Nome da empresa
+
+    Returns:
+        Conjunto de URLs já processadas
+    """
+    cache_file = get_cache_filename(empresa)
+    if os.path.exists(cache_file):
+        with open(cache_file, 'r') as f:
+            return set(line.strip() for line in f if line.strip())
+    return set()
+
+
+def save_crawled_urls_to_cache(empresa: str, urls: Set[str]) -> None:
+    """
+    Salva URLs processadas no cache.
+
+    Args:
+        empresa: Nome da empresa
+        urls: Conjunto de URLs processadas
+    """
+    cache_file = get_cache_filename(empresa)
+    with open(cache_file, 'w') as f:
+        for url in urls:
+            f.write(f"{url}\n")
+
+
+def get_document_cache_filename(empresa: str) -> str:
+    """
+    Retorna o nome do arquivo de cache para documentos de uma empresa.
+
+    Args:
+        empresa: Nome da empresa
+
+    Returns:
+        Caminho do arquivo de cache de documentos
+    """
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    return os.path.join(CACHE_DIR, f"{empresa}_document_urls.txt")
+
+
+def load_documents_from_cache(empresa: str) -> Set[str]:
+    """
+    Carrega URLs de documentos do cache.
+
+    Args:
+        empresa: Nome da empresa
+
+    Returns:
+        Conjunto de URLs de documentos
+    """
+    cache_file = get_document_cache_filename(empresa)
+    if os.path.exists(cache_file):
+        with open(cache_file, 'r') as f:
+            return set(line.strip() for line in f if line.strip())
+    return set()
+
+
+def save_documents_to_cache(empresa: str, urls: List[str]) -> None:
+    """
+    Salva URLs de documentos no cache.
+
+    Args:
+        empresa: Nome da empresa
+        urls: Lista de URLs de documentos
+    """
+    cache_file = get_document_cache_filename(empresa)
+    with open(cache_file, 'w') as f:
+        for url in urls:
+            f.write(f"{url}\n")
+
+
+def get_output_dir(empresa: str) -> str:
+    """
+    Retorna o diretório de saída para os arquivos da empresa.
+
+    Args:
+        empresa: Nome da empresa
+
+    Returns:
+        Caminho do diretório de saída
+    """
+    output_dir = os.path.join(OUTPUT_DIR, empresa)
+    os.makedirs(output_dir, exist_ok=True)
+    return output_dir
+
+
+def get_html_output_dir(empresa: str) -> str:
+    """
+    Retorna o diretório de saída para arquivos HTML/markdown da empresa.
+
+    Args:
+        empresa: Nome da empresa
+
+    Returns:
+        Caminho do diretório de saída para HTML/markdown
+    """
+    html_dir = os.path.join(get_output_dir(empresa), 'html')
+    os.makedirs(html_dir, exist_ok=True)
+    return html_dir
+
+
+def get_documents_output_dir(empresa: str) -> str:
+    """
+    Retorna o diretório de saída para documentos da empresa.
+
+    Args:
+        empresa: Nome da empresa
+
+    Returns:
+        Caminho do diretório de saída para documentos
+    """
+    docs_dir = os.path.join(get_output_dir(empresa), 'documentos')
+    os.makedirs(docs_dir, exist_ok=True)
+    return docs_dir
+
+
+def get_extracted_output_dir(empresa: str) -> str:
+    """
+    Retorna o diretório de saída para arquivos extraídos de ZIPs da empresa.
+
+    Args:
+        empresa: Nome da empresa
+
+    Returns:
+        Caminho do diretório de saída para arquivos extraídos
+    """
+    extracted_dir = os.path.join(get_output_dir(empresa), 'extraidos')
+    os.makedirs(extracted_dir, exist_ok=True)
+    return extracted_dir
+
+
+# Adicionar constantes para controle de tentativas e timeouts
+MAX_RETRIES = 3  # Número máximo de tentativas para baixar um documento
+DOWNLOAD_TIMEOUT = 60  # Timeout em segundos para download de documentos
+CONNECT_TIMEOUT = 30  # Timeout para conexão inicial
+GLOBAL_TIMEOUT = 3600  # Timeout global para a sessão completa (1 hora)
 
 # =============================================================================
 # FUNÇÕES DE UTILIDADE
@@ -467,9 +635,39 @@ async def extract_links_from_page(page_content: str, base_url: str) -> List[str]
     return links
 
 
+def save_html_content(url: str, html_content: str, nome_empresa: str) -> str:
+    """
+    Salva o conteúdo HTML original em um arquivo.
+
+    Args:
+        url: URL da página
+        html_content: Conteúdo HTML da página
+        nome_empresa: Nome da empresa
+
+    Returns:
+        Caminho do arquivo salvo
+    """
+    html_dir = get_html_output_dir(nome_empresa)
+
+    # Criar um nome de arquivo baseado na URL
+    filename = sanitize_filename(url)
+
+    # Garantir que a extensão seja .html
+    if not filename.endswith('.html'):
+        filename = f"{filename}.html"
+
+    file_path = os.path.join(html_dir, filename)
+
+    # Salvar o conteúdo no arquivo
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write(html_content)
+
+    return file_path
+
+
 async def download_document(url: str, nome_empresa: str, session: aiohttp.ClientSession) -> Tuple[bool, str, str]:
     """
-    Baixa um documento e retorna seu caminho local.
+    Baixa um documento e retorna seu caminho local, com sistema de retry.
 
     Args:
         url: URL do documento
@@ -479,11 +677,8 @@ async def download_document(url: str, nome_empresa: str, session: aiohttp.Client
     Returns:
         Tupla (sucesso, caminho_local, tipo_arquivo)
     """
-    # Criar diretório para documentos se não existir
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_dir = os.path.dirname(script_dir)
-    data_dir = os.path.join(project_dir, 'data', nome_empresa)
-    os.makedirs(data_dir, exist_ok=True)
+    # Criar diretório para documentos na nova estrutura
+    docs_dir = get_documents_output_dir(nome_empresa)
 
     # Determinar nome original do arquivo da URL
     parsed_url = urlparse(url)
@@ -491,6 +686,13 @@ async def download_document(url: str, nome_empresa: str, session: aiohttp.Client
 
     # Remover fragmentos (#) da URL que possam causar problemas
     clean_url = url.split('#')[0]
+
+    # Se a URL termina com # ou tem apenas fragmentos, provavelmente não é um documento válido
+    if clean_url.endswith('/') or not clean_url or clean_url == url.split('#')[0]:
+        logger.warning(f"URL possivelmente inválida para documento: {url}")
+        if '#' in url and not clean_url:
+            logger.error(f"URL contém apenas um fragmento, ignorando: {url}")
+            return False, "", ""
 
     # Limpar URLs duplicadas (problema observado com URLs como .pdf.pdf)
     if any(ext + ext in clean_url.lower() for ext in DOCUMENT_EXTENSIONS):
@@ -515,7 +717,7 @@ async def download_document(url: str, nome_empresa: str, session: aiohttp.Client
     # Certificar-se de que não há caracteres inválidos
     filename = re.sub(r'[\\/*?:"<>|]', '_', filename)
 
-    local_path = os.path.join(data_dir, filename)
+    local_path = os.path.join(docs_dir, filename)
 
     # Verificar se o arquivo já existe
     if os.path.exists(local_path):
@@ -524,96 +726,203 @@ async def download_document(url: str, nome_empresa: str, session: aiohttp.Client
             file_extension = "documento"
         return True, local_path, file_extension
 
-    try:
-        # Usar um timeout maior para arquivos grandes
-        timeout = aiohttp.ClientTimeout(total=300)  # 5 minutos
+    # Implementar sistema de retry
+    for attempt in range(MAX_RETRIES):
+        try:
+            # Usar um timeout específico para download
+            timeout = aiohttp.ClientTimeout(
+                total=DOWNLOAD_TIMEOUT,
+                sock_connect=CONNECT_TIMEOUT,
+                sock_read=DOWNLOAD_TIMEOUT
+            )
 
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': '*/*',
-        }
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': '*/*',
+            }
 
-        logger.info(f"Iniciando download de: {clean_url}")
+            logger.info(
+                f"Iniciando download de: {clean_url} (tentativa {attempt+1}/{MAX_RETRIES})")
 
-        # Usar a mesma sessão que foi passada como parâmetro, que já deve ter SSL desabilitado
-        async with session.get(clean_url, headers=headers, timeout=timeout, allow_redirects=True) as response:
-            if response.status != 200:
-                logger.error(
-                    f"Erro ao baixar {clean_url}: Status {response.status}")
-                return False, "", ""
+            # Verificar rapidamente se a URL é válida antes de tentar o download completo
+            try:
+                async with session.head(clean_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10), allow_redirects=True) as head_response:
+                    if head_response.status >= 400:
+                        logger.warning(
+                            f"URL retornou status {head_response.status}: {clean_url}")
+                        if head_response.status == 404:
+                            logger.error(
+                                f"Documento não encontrado (404): {clean_url}")
+                        return False, "", ""
+            except Exception as head_error:
+                logger.warning(
+                    f"Erro ao verificar cabeçalho: {str(head_error)}, tentando download direto")
 
-            # Verificar content-type
-            content_type = response.headers.get(
-                'Content-Type', '').split(';')[0].strip().lower()
+            # Usar a mesma sessão que foi passada como parâmetro, que já deve ter SSL desabilitado
+            async with session.get(clean_url, headers=headers, timeout=timeout, allow_redirects=True) as response:
+                if response.status != 200:
+                    logger.error(
+                        f"Erro ao baixar {clean_url}: Status {response.status} (tentativa {attempt+1}/{MAX_RETRIES})")
+                    # Se for 404, não tentar novamente
+                    if response.status == 404:
+                        return False, "", ""
+                    # Para outros erros, tentar novamente
+                    # Backoff exponencial
+                    await asyncio.sleep(2 * (attempt + 1))
+                    continue
 
-            # Verificar se o Content-Type indica um arquivo binário vs texto/html
-            if 'text/html' in content_type and not any(ext in filename.lower() for ext in DOCUMENT_EXTENSIONS):
+                # Verificar content-type
+                content_type = response.headers.get(
+                    'Content-Type', '').split(';')[0].strip().lower()
+
+                # Verificar se o Content-Type indica um arquivo binário vs texto/html
+                if 'text/html' in content_type and not any(ext in filename.lower() for ext in DOCUMENT_EXTENSIONS):
+                    logger.info(
+                        f"Ignorando {clean_url} com Content-Type: {content_type}")
+                    return False, "", ""
+
+                # Tentar obter nome do arquivo do header Content-Disposition
+                content_disposition = response.headers.get(
+                    'Content-Disposition', '')
+                if 'filename=' in content_disposition:
+                    cd_filename = re.findall(
+                        'filename=["\'](.*?)["\']', content_disposition)
+                    if cd_filename:
+                        new_filename = cd_filename[0]
+                        if new_filename and len(new_filename) < 100:
+                            # Atualizar o nome do arquivo se encontramos um válido no header
+                            filename = new_filename
+                            local_path = os.path.join(docs_dir, filename)
+
+                # Atualizar extensão do arquivo com base no Content-Type
+                if filename.endswith('.bin') or '.' not in filename:
+                    ext = guess_file_extension(content_type, url)
+                    if ext:
+                        filename = os.path.splitext(filename)[0] + ext
+                        local_path = os.path.join(docs_dir, filename)
+
+                # Criar o diretório pai se não existir (para casos de subdiretórios)
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+
+                # Salvar o conteúdo do arquivo com timeout para cada chunk
+                logger.info(f"Baixando {clean_url} para {local_path}")
+
+                # Usar um timeout para o download do conteúdo
+                content_size = 0
+                try:
+                    with open(local_path, 'wb') as f:
+                        chunk_size = 1024 * 1024  # 1MB por chunk
+                        download_start_time = asyncio.get_event_loop().time()
+
+                        while True:
+                            # Verificar timeout para evitar travamentos
+                            current_time = asyncio.get_event_loop().time()
+                            if current_time - download_start_time > DOWNLOAD_TIMEOUT:
+                                raise asyncio.TimeoutError(
+                                    f"Timeout ao baixar conteúdo de {clean_url}")
+
+                            # Ler chunk com timeout
+                            try:
+                                chunk = await asyncio.wait_for(
+                                    response.content.read(chunk_size),
+                                    timeout=30
+                                )
+                            except asyncio.TimeoutError:
+                                logger.warning(
+                                    f"Timeout ao ler chunk de {clean_url}")
+                                if content_size > 0:
+                                    # Se já baixou algum conteúdo, considera como sucesso parcial
+                                    break
+                                else:
+                                    raise
+
+                            if not chunk:
+                                break
+
+                            f.write(chunk)
+                            content_size += len(chunk)
+                except Exception as chunk_error:
+                    logger.error(f"Erro ao baixar chunks: {str(chunk_error)}")
+                    # Se baixou algum conteúdo, considera sucesso parcial
+                    if content_size > 0 and os.path.exists(local_path) and os.path.getsize(local_path) > 0:
+                        logger.warning(
+                            f"Download parcial para {local_path} ({content_size} bytes)")
+                    else:
+                        # Se não baixou nada, remover arquivo vazio e tentar novamente
+                        if os.path.exists(local_path):
+                            os.remove(local_path)
+                        if attempt < MAX_RETRIES - 1:
+                            await asyncio.sleep(2 * (attempt + 1))
+                            continue
+                        return False, "", ""
+
+                # Verificar se o arquivo foi salvo e tem conteúdo
+                if not os.path.exists(local_path) or os.path.getsize(local_path) == 0:
+                    logger.error(
+                        f"Arquivo baixado está vazio ou não existe: {local_path}")
+                    if os.path.exists(local_path):
+                        os.remove(local_path)
+                    if attempt < MAX_RETRIES - 1:
+                        await asyncio.sleep(2 * (attempt + 1))
+                        continue
+                    return False, "", ""
+
                 logger.info(
-                    f"Ignorando {clean_url} com Content-Type: {content_type}")
+                    f"Download concluído: {local_path} ({os.path.getsize(local_path)} bytes)")
+
+                # Determinar o tipo de arquivo
+                file_extension = os.path.splitext(filename)[1].lstrip('.')
+
+                if not file_extension:
+                    # Se não tem extensão, derivar do content-type
+                    if 'pdf' in content_type:
+                        file_type = 'pdf'
+                    elif 'excel' in content_type or 'spreadsheet' in content_type:
+                        file_type = 'excel'
+                    elif 'word' in content_type:
+                        file_type = 'word'
+                    elif 'csv' in content_type:
+                        file_type = 'csv'
+                    elif 'powerpoint' in content_type or 'presentation' in content_type:
+                        file_type = 'powerpoint'
+                    elif 'zip' in content_type or 'compressed' in content_type:
+                        file_type = 'arquivo_compactado'
+                    else:
+                        file_type = 'documento'
+                else:
+                    file_type = file_extension
+
+                return True, local_path, file_type
+
+        except asyncio.TimeoutError:
+            logger.error(
+                f"Timeout ao baixar {url} (tentativa {attempt+1}/{MAX_RETRIES})")
+            if attempt < MAX_RETRIES - 1:
+                # Espera antes de tentar novamente
+                await asyncio.sleep(2 * (attempt + 1))
+            else:
+                return False, "", ""
+        except aiohttp.ClientError as ce:
+            logger.error(
+                f"Erro de cliente ao baixar {url}: {str(ce)} (tentativa {attempt+1}/{MAX_RETRIES})")
+            if attempt < MAX_RETRIES - 1:
+                await asyncio.sleep(2 * (attempt + 1))
+            else:
+                return False, "", ""
+        except Exception as e:
+            logger.error(
+                f"Erro ao baixar {url}: {str(e)} (tentativa {attempt+1}/{MAX_RETRIES})")
+            if attempt < MAX_RETRIES - 1:
+                await asyncio.sleep(2 * (attempt + 1))
+            else:
                 return False, "", ""
 
-            # Tentar obter nome do arquivo do header Content-Disposition
-            content_disposition = response.headers.get(
-                'Content-Disposition', '')
-            if 'filename=' in content_disposition:
-                cd_filename = re.findall(
-                    'filename=["\'](.*?)["\']', content_disposition)
-                if cd_filename:
-                    new_filename = cd_filename[0]
-                    if new_filename and len(new_filename) < 100:
-                        # Atualizar o nome do arquivo se encontramos um válido no header
-                        filename = new_filename
-                        local_path = os.path.join(data_dir, filename)
+    # Se chegou aqui, todas as tentativas falharam
+    return False, "", ""
 
-            # Atualizar extensão do arquivo com base no Content-Type
-            if filename.endswith('.bin') or '.' not in filename:
-                ext = guess_file_extension(content_type, url)
-                if ext:
-                    filename = os.path.splitext(filename)[0] + ext
-                    local_path = os.path.join(data_dir, filename)
-
-            # Salvar o conteúdo do arquivo
-            logger.info(f"Baixando {clean_url} para {local_path}")
-            with open(local_path, 'wb') as f:
-                chunk_size = 1024 * 1024  # 1MB por chunk
-                while True:
-                    chunk = await response.content.read(chunk_size)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-
-            logger.info(f"Download concluído: {local_path}")
-
-            # Determinar o tipo de arquivo
-            file_extension = os.path.splitext(filename)[1].lstrip('.')
-
-            if not file_extension:
-                # Se não tem extensão, derivar do content-type
-                if 'pdf' in content_type:
-                    file_type = 'pdf'
-                elif 'excel' in content_type or 'spreadsheet' in content_type:
-                    file_type = 'excel'
-                elif 'word' in content_type:
-                    file_type = 'word'
-                elif 'csv' in content_type:
-                    file_type = 'csv'
-                elif 'powerpoint' in content_type or 'presentation' in content_type:
-                    file_type = 'powerpoint'
-                elif 'zip' in content_type or 'compressed' in content_type:
-                    file_type = 'arquivo_compactado'
-                else:
-                    file_type = 'documento'
-            else:
-                file_type = file_extension
-
-            return True, local_path, file_type
-
-    except asyncio.TimeoutError:
-        logger.error(f"Timeout ao baixar {url}")
-        return False, "", ""
-    except Exception as e:
-        logger.error(f"Erro ao baixar {url}: {str(e)}")
-        return False, "", ""
+# =============================================================================
+# FUNÇÕES PRINCIPAIS DE PROCESSAMENTO
+# =============================================================================
 
 
 async def extract_zip_file(zip_path: str, extract_dir: str, nome_empresa: str, cur, tabela: str, parent_url: str) -> List[str]:
@@ -634,6 +943,9 @@ async def extract_zip_file(zip_path: str, extract_dir: str, nome_empresa: str, c
     extracted_files = []
     zip_tags = extract_path_tags(parent_url)
 
+    # Obter diretório de destino para arquivos extraídos
+    final_extracted_dir = get_extracted_output_dir(nome_empresa)
+
     # Adicionar tag genérica
     if 'arquivo_compactado' not in zip_tags:
         zip_tags.append('arquivo_compactado')
@@ -647,7 +959,12 @@ async def extract_zip_file(zip_path: str, extract_dir: str, nome_empresa: str, c
             # Criar um UUID para este ZIP específico para relacionar os arquivos extraídos
             zip_uuid = str(uuid.uuid4())
 
-            # Extrair todos os arquivos
+            # Criar diretório específico para este ZIP dentro do diretório de extraídos
+            zip_specific_dir = os.path.join(
+                final_extracted_dir, os.path.basename(zip_path).replace('.zip', ''))
+            os.makedirs(zip_specific_dir, exist_ok=True)
+
+            # Extrair todos os arquivos primeiro para o diretório temporário
             zip_ref.extractall(extract_dir)
 
             # Processar cada arquivo extraído
@@ -672,10 +989,21 @@ async def extract_zip_file(zip_path: str, extract_dir: str, nome_empresa: str, c
                 # Determinar tipo do arquivo
                 file_type = get_file_type(item)
 
+                # Mover o arquivo para o diretório final
+                final_filename = os.path.basename(item)
+                final_path = os.path.join(zip_specific_dir, final_filename)
+
+                # Garantir que o diretório de destino existe
+                os.makedirs(os.path.dirname(final_path), exist_ok=True)
+
+                # Copiar o arquivo para o destino final
+                shutil.copy2(extracted_path, final_path)
+                logger.info(f"Arquivo extraído movido para: {final_path}")
+
                 # Criar caminho relativo para armazenar no banco
                 script_dir = os.path.dirname(os.path.abspath(__file__))
                 project_dir = os.path.dirname(script_dir)
-                rel_path = os.path.relpath(extracted_path, project_dir)
+                rel_path = os.path.relpath(final_path, project_dir)
 
                 # Criar tags para o arquivo extraído
                 file_tags = list(zip_tags)  # Copiar as tags do ZIP pai
@@ -705,7 +1033,7 @@ async def extract_zip_file(zip_path: str, extract_dir: str, nome_empresa: str, c
                     """, (content, virtual_link, rel_path, file_tags, parent_url))
 
                     logger.info(f"Arquivo extraído salvo no banco: {item}")
-                    extracted_files.append(extracted_path)
+                    extracted_files.append(final_path)
 
                 except Exception as e:
                     logger.error(
@@ -726,7 +1054,7 @@ async def extract_zip_file(zip_path: str, extract_dir: str, nome_empresa: str, c
 # =============================================================================
 
 
-async def process_empresa(nome_empresa: str, force_update: bool = False, skip_browser: bool = False) -> None:
+async def process_empresa(nome_empresa: str, force_update: bool = False, skip_browser: bool = False, use_cache: bool = True) -> None:
     """
     Processa o crawler para uma empresa específica.
 
@@ -734,6 +1062,7 @@ async def process_empresa(nome_empresa: str, force_update: bool = False, skip_br
         nome_empresa: Nome da empresa a ser processada
         force_update: Se deve forçar atualização de todas as páginas
         skip_browser: Se deve usar detecção antecipada de arquivos e pular navegação por browser
+        use_cache: Se deve usar o sistema de cache para URLs já processadas
     """
     if nome_empresa not in EMPRESAS:
         logger.error(
@@ -746,12 +1075,34 @@ async def process_empresa(nome_empresa: str, force_update: bool = False, skip_br
     # Registrar adaptador para listas
     register_adapter(list, adapt_list)
 
-    # Obter URLs já processadas (para crawling incremental)
+    # Obter URLs já processadas do BD e do cache
     existing_urls = set()
     if not force_update:
+        # Carregar URLs do banco de dados
         existing_urls = get_existing_urls(config["tabela"])
         logger.info(
-            f"Encontradas {len(existing_urls)} URLs já processadas para {nome_empresa}")
+            f"Encontradas {len(existing_urls)} URLs já processadas no banco para {nome_empresa}")
+
+        # Se uso de cache estiver habilitado, adicionar também as URLs do cache
+        if use_cache:
+            cache_urls = load_crawled_urls_from_cache(nome_empresa)
+            existing_urls.update(cache_urls)
+            logger.info(
+                f"Adicionadas {len(cache_urls)} URLs do cache para {nome_empresa}")
+
+    # Lista para armazenar URLs processadas nesta execução
+    crawled_urls = set()
+
+    # Lista para armazenar URLs de documentos que encontramos
+    document_urls = []
+
+    # Carregar documentos já processados do cache para evitar reprocessamento
+    if use_cache and not force_update:
+        cached_documents = load_documents_from_cache(nome_empresa)
+        logger.info(
+            f"Carregados {len(cached_documents)} documentos do cache para {nome_empresa}")
+        # Remover documentos já processados da lista de processar
+        existing_urls.update(cached_documents)
 
     # Configurações do browser com modo verboso
     browser_config = BrowserConfig(verbose=True)
@@ -826,7 +1177,15 @@ async def process_empresa(nome_empresa: str, force_update: bool = False, skip_br
         logger.info(
             f"Usando configuração de conexão otimizada para {nome_empresa}")
 
-    async with aiohttp.ClientSession(connector=connector, timeout=conn_timeout) as session:
+    # Usar timeout mais resistente a travamentos
+    timeout = aiohttp.ClientTimeout(
+        total=GLOBAL_TIMEOUT,  # Timeout global para toda a sessão
+        connect=CONNECT_TIMEOUT,  # Timeout para estabelecer conexão
+        sock_connect=CONNECT_TIMEOUT,  # Timeout para conectar socket
+        sock_read=DOWNLOAD_TIMEOUT  # Timeout para ler dados do socket
+    )
+
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         # Função para checagem rápida de URLs de documentos quando skip_browser=True
         async def check_document_head(url: str) -> bool:
             """Faz uma requisição HEAD para verificar se o URL é um documento sem baixá-lo"""
@@ -979,6 +1338,11 @@ async def process_empresa(nome_empresa: str, force_update: bool = False, skip_br
             # Executar o crawler para páginas HTML
             results = await crawler.arun(config["url"], config=run_config)
 
+            # Adicionar URLs processadas à lista para salvar no cache
+            for result in results:
+                if result.success:
+                    crawled_urls.add(result.url)
+
             logger.info(
                 f"Crawled {len(results)} páginas HTML para {nome_empresa}")
 
@@ -1077,6 +1441,26 @@ async def process_empresa(nome_empresa: str, force_update: bool = False, skip_br
                         for link in result.links:
                             content += f"- {link}\n"
 
+                # Salvar o conteúdo HTML original
+                html_content = ""
+                if hasattr(result, 'html'):
+                    html_content = result.html
+                else:
+                    # Fallback caso não tenha HTML
+                    html_content = f"<html><head><title>{getattr(result, 'title', 'Sem título')}</title></head><body>"
+                    if hasattr(result, 'cleaned_html'):
+                        html_content += result.cleaned_html
+                    elif hasattr(result, 'text'):
+                        html_content += f"<pre>{result.text}</pre>"
+                    else:
+                        html_content += "<p>Sem conteúdo disponível</p>"
+                    html_content += "</body></html>"
+
+                # Salvar o HTML
+                html_path = save_html_content(
+                    result.url, html_content, nome_empresa)
+                logger.info(f"Conteúdo HTML salvo em: {html_path}")
+
                 # Extrair tags do caminho da URL
                 tags = extract_path_tags(result.url)
 
@@ -1105,16 +1489,17 @@ async def process_empresa(nome_empresa: str, force_update: bool = False, skip_br
                             SET content = %s,
                                 images = %s,
                                 tags = %s,
-                                dt_download = CURRENT_TIMESTAMP
+                                dt_download = CURRENT_TIMESTAMP,
+                                local_path = %s
                             WHERE link = %s
-                        """, (content, images if images else None, tags_array, result.url))
+                        """, (content, images if images else None, tags_array, html_path, result.url))
                         atualizadas += 1
                     else:
                         # Insert - para páginas novas
                         cur.execute(f"""
-                            INSERT INTO {config['tabela']} (content, link, images, tags)
-                            VALUES (%s, %s, %s, %s)
-                        """, (content, result.url, images if images else None, tags_array))
+                            INSERT INTO {config['tabela']} (content, link, images, tags, local_path)
+                            VALUES (%s, %s, %s, %s, %s)
+                        """, (content, result.url, images if images else None, tags_array, html_path))
                         novas_paginas += 1
 
                     conn.commit()
@@ -1129,16 +1514,27 @@ async def process_empresa(nome_empresa: str, force_update: bool = False, skip_br
             documentos_falhos = 0
             documentos_extraidos = 0
 
+            # Adicionar contador para monitoramento de progresso
+            # Reportar a cada 10% aprox.
+            progress_interval = max(1, len(document_urls) // 10)
+
+            # Criar chunks de URLs de documentos para processar em paralelo
+            chunk_size = 3  # Processar menos documentos por vez para melhor controle
+
             # Criar diretório temporário para extração
             script_dir = os.path.dirname(os.path.abspath(__file__))
             project_dir = os.path.dirname(script_dir)
             temp_extract_dir = os.path.join(
-                project_dir, 'data', nome_empresa, 'extracted')
+                get_output_dir(nome_empresa), 'temp_extracted')
             os.makedirs(temp_extract_dir, exist_ok=True)
 
             # Criar chunks de URLs de documentos para processar em paralelo
-            chunk_size = 5  # Processar 5 documentos por vez para evitar sobrecarga
             for i in range(0, len(document_urls), chunk_size):
+                # Mostrar progresso
+                if i % progress_interval == 0 or i + chunk_size >= len(document_urls):
+                    logger.info(
+                        f"Progresso de download: {i}/{len(document_urls)} documentos ({int(i/len(document_urls)*100 if document_urls else 0)}%)")
+
                 chunk = document_urls[i:i+chunk_size]
                 download_tasks = []
 
@@ -1154,10 +1550,15 @@ async def process_empresa(nome_empresa: str, force_update: bool = False, skip_br
                     download_tasks.append(download_document(
                         doc_url, nome_empresa, session))
 
-                # Executar os downloads em paralelo
+                # Executar os downloads em paralelo com timeout global
                 if download_tasks:
                     try:
-                        download_results = await asyncio.gather(*download_tasks, return_exceptions=True)
+                        # Adicionar timeout global para o gather
+                        download_results = await asyncio.wait_for(
+                            asyncio.gather(*download_tasks,
+                                           return_exceptions=True),
+                            timeout=DOWNLOAD_TIMEOUT * 2  # Dar tempo extra para o conjunto de downloads
+                        )
 
                         # Processar resultados dos downloads
                         for idx, result in enumerate(download_results):
@@ -1272,17 +1673,17 @@ async def process_empresa(nome_empresa: str, force_update: bool = False, skip_br
                                 logger.error(
                                     f"Erro ao salvar documento no banco: {str(e)}")
                                 conn.rollback()
+                    except asyncio.TimeoutError:
+                        logger.error(
+                            f"Timeout global ao processar batch de downloads")
                     except Exception as e:
                         logger.error(
                             f"Erro ao processar batch de downloads: {str(e)}")
 
-            cur.close()
-            conn.close()
+                # Adicionar pequena pausa entre batches para evitar sobrecarga
+                await asyncio.sleep(0.5)
 
-            logger.info(
-                f"Resumo {nome_empresa}: {novas_paginas} novas páginas HTML, {atualizadas} páginas atualizadas")
-            logger.info(
-                f"Documentos: {documentos_baixados} baixados com sucesso, {documentos_falhos} falhas, {documentos_extraidos} extraídos de ZIPs")
+        # ...existing code...
 
 # =============================================================================
 # FUNÇÃO PRINCIPAL E PONTO DE ENTRADA
@@ -1290,6 +1691,9 @@ async def process_empresa(nome_empresa: str, force_update: bool = False, skip_br
 
 
 async def main():
+    # Declaração global deve vir antes de qualquer uso da variável
+    global DOWNLOAD_TIMEOUT
+
     parser = argparse.ArgumentParser(
         description='Crawler incremental para empresas')
     parser.add_argument('--empresas', nargs='+', choices=list(EMPRESAS.keys()) + ['todas'],
@@ -1302,6 +1706,10 @@ async def main():
                         help='Pular navegação por browser para arquivos de documentos')
     parser.add_argument('--no-ssl-verify', action='store_true',
                         help='Desabilitar verificação de certificados SSL')
+    parser.add_argument('--no-cache', action='store_true',
+                        help='Desabilitar uso de cache para URLs já processadas')
+    parser.add_argument('--timeout', type=int, default=DOWNLOAD_TIMEOUT,
+                        help=f'Timeout em segundos para downloads (padrão: {DOWNLOAD_TIMEOUT})')
 
     args = parser.parse_args()
 
@@ -1322,28 +1730,39 @@ async def main():
     empresas_para_processar = list(
         EMPRESAS.keys()) if 'todas' in args.empresas else args.empresas
 
+    # Usar cache por padrão, a menos que --no-cache seja especificado
+    use_cache = not args.no_cache
+
+    # Atualizar timeout se especificado
+    if args.timeout and args.timeout > 0:
+        DOWNLOAD_TIMEOUT = args.timeout
+        logger.info(
+            f"Timeout para downloads definido como {DOWNLOAD_TIMEOUT} segundos")
+
     # Processar as empresas
     if args.sequential:
         # Modo sequencial
         for empresa in empresas_para_processar:
-            await process_empresa(empresa, args.force, skip_browser=args.skip_browser)
+            await process_empresa(empresa, args.force, skip_browser=args.skip_browser, use_cache=use_cache)
             logger.info(
                 f"Concluído processamento sequencial de {empresa.upper()}")
     else:
         # Modo paralelo (processamento assíncrono de todas as empresas)
         logger.info(
             f"Iniciando processamento paralelo de {len(empresas_para_processar)} empresas")
-        tasks = [process_empresa(empresa, args.force, skip_browser=args.skip_browser)
+        tasks = [process_empresa(empresa, args.force, skip_browser=args.skip_browser, use_cache=use_cache)
                  for empresa in empresas_para_processar]
         await asyncio.gather(*tasks)
         logger.info("Concluído processamento paralelo de todas as empresas")
 
 if __name__ == "__main__":
-    # Certificar-se de que o diretório de dados existe
+    # Certificar-se de que o diretório de dados e saída existe
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_dir = os.path.dirname(script_dir)
     data_dir = os.path.join(project_dir, 'data')
+    output_dir = os.path.join(project_dir, 'output')
     os.makedirs(data_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
 
     # Inicializar mimetypes
     mimetypes.init()
@@ -1401,5 +1820,17 @@ if __name__ == "__main__":
 
     aiohttp.ClientSession = patched_ClientSession
 
+    # Configurar tratamento de exceções não tratadas
+    def exception_handler(loop, context):
+        exception = context.get('exception')
+        logger.error(f"Exceção não tratada: {context['message']}")
+        if exception:
+            logger.error(f"Detalhes: {str(exception)}")
+
+    # Obter o event loop e configurar handler
+    loop = asyncio.get_event_loop()
+    loop.set_exception_handler(exception_handler)
+
     # Executar o programa principal
-    asyncio.run(main())
+    loop.run_until_complete(main())
+    loop.close()

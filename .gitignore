@@ -9,9 +9,12 @@ wheels/
 # Virtual environments
 .venv
 
+*.md
+
 .env
 
 data/
+output/
 
 # Arquivos de ambiente
 .env
